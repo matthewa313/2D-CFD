@@ -1,0 +1,175 @@
+<!DOCTYPE HTML>
+<!--
+	A lattice-Boltzmann fluid simulation in JavaScript, using HTML5 canvas for graphics
+
+	Copyright 2013, Daniel V. Schroeder
+
+	Permission is hereby granted, free of charge, to any person obtaining a copy of
+	this software and associated data and documentation (the "Software"), to deal in
+	the Software without restriction, including without limitation the rights to
+	use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies
+	of the Software, and to permit persons to whom the Software is furnished to do
+	so, subject to the following conditions:
+
+	The above copyright notice and this permission notice shall be included in all
+	copies or substantial portions of the Software.
+
+	THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED,
+	INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+	PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
+	ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
+	OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
+	OTHER DEALINGS IN THE SOFTWARE.
+
+	Except as contained in this notice, the name of the author shall not be used in
+	advertising or otherwise to promote the sale, use or other dealings in this
+	Software without prior written authorization.
+
+	Credits:
+	The "wind tunnel" entry/exit conditions are inspired by Graham Pullan's code
+	(http://www.many-core.group.cam.ac.uk/projects/LBdemo.shtml).  Additional inspiration from
+	Thomas Pohl's applet (http://thomas-pohl.info/work/lba.html).  Other portions of code are based
+	on Wagner (http://www.ndsu.edu/physics/people/faculty/wagner/lattice_boltzmann_codes/) and
+	Gonsalves (http://www.physics.buffalo.edu/phy411-506-2004/index.html; code adapted from Succi,
+	http://global.oup.com/academic/product/the-lattice-boltzmann-equation-9780199679249).
+
+	Revision history:
+	First version, with only start/stop, speed, and viscosity controls, February 2013
+	Added resolution control, mouse interaction, plot options, etc., March 2013
+	Added sensor, contrast slider, improved tracer placement, Fy period readout, May 2013
+	Added option to animate using setTimeout instead of requestAnimationFrame, July 2013
+	Added "Flowline" plotting (actually just line segments), August 2013
+
+	Still to do:
+	* Fix the apparent bug in the force calculation that gives inconsistent results depending
+		on initial conditions.  Perhaps bounce-backs between adjacent barrier sites don't cancel?
+	* Grabbing the sensor while "drag fluid" selected causes a momentary drag at previous mouse location.
+	* Try to pass two-fingered touch events on to the browser, so it's still possible to zoom in and out.
+	* Work on GUI control layout, especially for smaller screens.
+	* Treat ends symmetrically when flow speed is zero.
+	* Try some other visualization techniques.
+-->
+<html>
+
+<head>
+  <title>Fluid Dynamics Simulation</title>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=620">
+  <style>
+    body {
+      background-color: #ffffff;
+      font-family: Arial, sans-serif;
+      font-size: 14px;
+      text-align: center;
+    }
+
+    /* gray background, center everything */
+    p {
+      margin-left: auto;
+      margin-right: auto;
+      width: 600px;
+    }
+
+    /* keep paragraphs narrow and centered */
+    input {
+      font-size: 115%;
+    }
+
+    /* make buttons bigger */
+    input[type="range"] {
+      width: 90px;
+    }
+
+    /* make sliders shorter */
+    select {
+      font-size: 115%;
+    }
+
+    /* make selectors bigger too */
+    li {
+      text-align: left;
+    }
+  </style>
+</head>
+
+<body>
+
+  <h2>Fluid Dynamics Simulation</h2>
+
+  <canvas id="theCanvas" width="600" height="240">This application runs only in modern
+    browsers. For best results, use Google Chrome.</canvas>
+
+  <div>
+    <select id="sizeSelect" onchange="resize()">
+      <option value="10">60 x 24</option>
+      <option value="8">75 x 30</option>
+      <option value="6">100 x 40</option>
+      <option value="5">120 x 48</option>
+      <option value="4">150 x 60</option>
+      <option value="3">200 x 80</option>
+      <option value="2">300 x 120</option>
+      <option value="1">600 x 240</option>
+    </select>
+    <input id="resetFluidButton" type="button" onclick="initFluid()" value="Reset fluid">
+    <input id="stepButton" type="button" onclick="simulate()" value="Step">
+    <input id="startButton" type="button" onclick="startStop()" value="Start">
+  </div>
+  <div>
+    Flow speed = <span id="speedValue">0.100</span>
+    <input id="speedSlider" type="range" min="0" max="0.12" step="0.005" value="0.1" onchange="adjustSpeed()">
+    &nbsp;&nbsp;Viscosity = <span id="viscValue">0.020</span>
+    <input id="viscSlider" type="range" min="0.005" max="0.2" step="0.005" value="0.02" onchange="adjustViscosity()">
+  </div>
+  <div style="margin-top:3px">
+    <select id="mouseSelect">
+      <option value="draw">Draw barriers</option>
+      <option value="erase">Erase barriers</option>
+      <option value="push">Drag fluid</option>
+    </select>
+    <select id="barrierSelect" onchange="placePresetBarrier()">
+      <option>Barrier shapes</option>
+    </select>
+    <input id="clearButton" type="button" onclick="clearBarriers()" value="Clear barriers">
+  </div>
+  <div>
+    <select id="plotSelect" onchange="paintCanvas()">
+      <option>Plot density</option>
+      <option>Plot x velocity</option>
+      <option>Plot y velocity</option>
+      <option>Plot speed</option>
+      <option selected>Plot curl</option>
+    </select>
+    &nbsp;&nbsp;Contrast:
+    <input id="contrastSlider" type="range" min="-10" max="10" step="1" value="0" onchange="paintCanvas()">
+  </div>
+  <div>
+    Animation speed:
+    <input id="stepsSlider" type="range" min="1" max="40" step="1" value="20" onchange="resetTimer()">
+    &nbsp;&nbsp;Steps per second: <span id="speedReadout">0</span>
+    &nbsp;&nbsp;<input id="rafCheck" type="checkbox" checked onchange="resetTimer()">Faster?
+  </div>
+  <div style="margin-top:4px">
+    <!--<input id="pixelCheck" type="checkbox" checked onchange="resetTimer()">Use pixel graphics-->
+    Show:
+    <input id="tracerCheck" type="checkbox" onchange="initTracers()">Tracers
+    <input id="flowlineCheck" type="checkbox" onchange="paintCanvas()">Flowlines
+    <input id="forceCheck" type="checkbox" onchange="paintCanvas()">Force on barriers
+    <input id="sensorCheck" type="checkbox" onchange="paintCanvas()">Sensor
+    <input id="dataCheck" type="checkbox" onchange="showData()">Data
+  </div>
+  <div id="dataSection" style="display:none">
+    <textarea id="dataArea" rows="8" cols="50" disabled readonly></textarea>
+    <div>
+      <input id="dataButton" type="button" value="Start data collection" onclick="startOrStopData()">
+      <input id="periodButton" type="button" value="Show F_y period" onclick="showPeriod()">
+      <input id="barrierDataButton" type="button" value="Show barrier locations" onclick="showBarrierLocations()">
+      <input id="debugButton" type="button" value="Debug" onclick="debug()" style="display:none">
+    </div>
+  </div>
+
+  <script src="barrierlist.js"></script>
+  <script src="fluidDynamicsSolver.js"></script>
+
+</body>
+
+</html>
